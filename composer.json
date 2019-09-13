@@ -1,0 +1,22 @@
+{
+    "name": "laravel-datatable/laravel-datatable",
+    "authors": [
+        {
+            "name": "eklundkristoffer",
+            "email": "eklukris@gmail.com"
+        }
+    ],
+    "require": {},
+    "autoload": {
+        "psr-4": {
+            "Datatable\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Datatable\\DatatableServiceProvider"
+            ]
+        }
+    }
+}
