@@ -5,9 +5,6 @@ namespace Datatable;
 use DB;
 use Exception;
 use Validator;
-use Illuminate\Pagination\Paginator;
-use Illuminate\Support\Facades\Cache;
-
 use Illuminate\Database\Query\Builder;
 
 abstract class Query
@@ -97,7 +94,7 @@ abstract class Query
             $this->sortQuery();
         }
 
-        if ($this->filter['enabled'] && $this->request->filled('filters') && !empty($this->request->get('filters'))) {
+        if ($this->request->filled('filters') && !empty($this->request->get('filters'))) {
             $this->filterQuery();
         }
 
@@ -105,9 +102,12 @@ abstract class Query
 
         $this->query = $this->query();
 
-        if (count($this->selects)) {
-            $this->performSelectsOnQuery();
-        }
+        // @fixme
+        $this->query = $this->query->select(
+            collect($this->columns())->map(function ($column) {
+                return $column['column'] . ' AS ' . $column['column'];
+            })->toArray()
+        );
 
         if ($this->search['enabled'] && $this->request->filled('searchString')) {
             $this->searchQuery($this->request->get('searchString'));
@@ -124,36 +124,36 @@ abstract class Query
         return $this->response($items);
     }
 
+    /**
+     * Return the queried response to the datatable to render.
+     *
+     * @param  array  $items
+     * @return array
+     */
     public function response($items = [])
     {
+        // Attach the query class namespace to the filter.
+        $filters = collect($this->filters())->map(function ($filter) {
+            $filter->withMeta(['query' => get_called_class()]);
+
+            return $filter;
+        });
+
         return [
-            'filter' => ['enabled' => $this->filter['enabled'], 'filters' => $this->getAvailableFiltersFormatted()],
+            'filters' => $filters,
             'pagination' => $this->pagination['enabled'],
             'searchable' => $this->search['enabled'],
             'sort' => $this->sort,
             'items' => $items,
             'requiresSearch' => $this->requiresSearch,
             'requiresSearchLength' => $this->requiresSearchLength,
+            'columns' => $this->columns(),
         ];
     }
 
-    public function getAvailableFiltersFormatted()
-    {
-        $availableFilters = [];
-
-        if (!$this->filter['enabled'] || !count($this->filter['filters'])) {
-            return $availableFilters;
-        }
-
-        foreach ($this->filter['filters'] as $column => $filter) {
-            $class = resolve($filter);
-
-            $availableFilters[$column] = $class->toArray();
-        }
-
-        return $availableFilters;
-    }
-
+    /**
+     * FIXME
+     */
     public function injectRouteParameters()
     {
         foreach ($this->request->get('inject') as $name => $value) {
@@ -163,6 +163,11 @@ abstract class Query
         }
     }
 
+    /**
+     * Perform requested sortings against the current query.
+     *
+     * @return void
+     */
     public function sortQuery()
     {
         $currentSorting = $this->request->sort;
@@ -175,32 +180,15 @@ abstract class Query
         }
     }
 
-    public function performSelectsOnQuery()
-    {
-        $formatedSelects = [];
-
-        foreach ($this->selects as $name => $alias) {
-            $formatedSelects[] = $alias.' AS '.$name;
-        }
-
-        $this->query = $this->query->select($formatedSelects);
-    }
-
+    /**
+     * Perform a search query against the current query.
+     *
+     * @param  string $searchString
+     * @return void
+     */
     public function searchQuery($searchString)
     {
-        $fields = count($this->selects) ? $this->nameFieldsToAlias($this->search['fields']) : $this->search['fields'];
-
-        $this->query = $this->query->whereLike($fields, $searchString);
-    }
-
-    public function nameFieldsToAlias($fields) {
-        $formatedFields = [];
-
-        foreach ($fields as $field) {
-            $formatedFields[] = $this->selects[$field];
-        }
-
-        return $formatedFields;
+        $this->query = $this->query->whereLike($this->search['fields'], $searchString);
     }
 
     /**
@@ -210,56 +198,25 @@ abstract class Query
      */
     public function filterQuery()
     {
-        foreach ($this->getAvailableFiltersFormatted() as $column => $settings) {
-            $filters = $this->request->get('filters');
-
-            // If the filter is not filtered or has an empty value just continue.
-            if (! isset($filters[$column]) || is_null($filters[$column]['value'])) {
-                continue;
-            }
-
-            if (isset($settings['validation'])) {
-                $validator = Validator::make($filters, [
-                    $column => $settings['validation'],
-                ]);
-
-                if ($validator->fails()) {
+        // Start with iterating through all the available
+        // filters for this current datatable configuration.
+        foreach ($this->filters() as $filter) {
+            // Then we iterate through all the database columns
+            // that this filter is able to filter against.
+            foreach ($filter->getColumns() as $column) {
+                // Continue if the given filter is not in the request.
+                if (! isset($this->request->filters[$filter->getName()])) {
                     continue;
                 }
-            }
 
-            $selectedColumn = empty($this->selects) ? $column : $this->selects[$column];
+                $value = $this->request->filters[$filter->getName()];
 
-            if ($settings['type'] === 'options') {
-                $this->query = $this->query->whereIn($selectedColumn, $filters[$column]['value']);
-                continue;
-            }
-
-            if ($settings['type'] === 'from_date' && ! empty($filters[$column])) {
-                if (strpos($filters[$column], ',') !== false) {
-                    $from = date(explode(',', $filters[$column])[0]);
-                    $to = date(explode(',', $filters[$column])[1]);
-
-                    $this->query = $this->query->whereDate($selectedColumn, '>=', $from)->whereDate($selectedColumn, '<=', $to);
-                } else {
-                    $this->query = $this->query->whereDate($selectedColumn, '>=', $filters[$column]);
+                // Ignore if the value is empty.
+                if (empty($value)) {
+                    continue;
                 }
-                continue;
-            }
 
-            if ($settings['type'] === 'greater_than') {
-                $this->query = $this->query->where($selectedColumn, '>=', $filters[$column]);
-                continue;
-            }
-
-            if ($settings['type'] === 'search') {
-                $this->query = $this->query->where($selectedColumn, $filters[$column]);
-                continue;
-            }
-
-            if ($settings['type'] === 'relation') {
-                $this->query = $this->query->where($selectedColumn, $filters[$column]['value'][$settings['relation']['search_by']]);
-                continue;
+                $this->query = $filter->execute($this->query, $column, $value);
             }
         }
     }
