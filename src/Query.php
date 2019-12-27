@@ -3,6 +3,7 @@
 namespace Datatable;
 
 use DB;
+use Closure;
 use Exception;
 use Validator;
 use Illuminate\Database\Query\Builder;
@@ -133,7 +134,13 @@ abstract class Query
             'items' => $items,
             'requiresSearch' => $this->requiresSearch,
             'requiresSearchLength' => $this->requiresSearchLength,
-            'columns' => $this->columns(),
+            'columns' => collect($this->columns())->filter(function ($column) {
+                if (isset($column['hide'])) {
+                    return !(($column['hide'] instanceof Closure) ? $column['hide']() : $column['hide']);
+                }
+
+                return true;
+            }),
         ];
     }
 
