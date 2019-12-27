@@ -55,13 +55,6 @@ abstract class Query
         'filters' => [],
     ];
 
-    /**
-     * Query selects with alias.
-     *
-     * @var array
-     */
-    protected $selects = [];
-
     protected $requiresSearch = false;
     protected $requiresSearchLength = 1;
 
@@ -98,16 +91,7 @@ abstract class Query
             $this->filterQuery();
         }
 
-        // $this->query = $this->query->whereNull('deleted_at');
-
         $this->query = $this->query();
-
-        // @fixme
-        $this->query = $this->query->select(
-            collect($this->columns())->map(function ($column) {
-                return $column['column'] . ' AS ' . $column['column'];
-            })->toArray()
-        );
 
         if ($this->search['enabled'] && $this->request->filled('searchString')) {
             $this->searchQuery($this->request->get('searchString'));
