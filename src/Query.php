@@ -133,7 +133,9 @@ abstract class Query
     public function response($items = [])
     {
         // Attach the query class namespace to the filter.
-        $filters = collect($this->filters())->map(function ($filter) {
+        $filters = collect(
+            method_exists($this, 'filters') ? $this->filters() : []
+        )->map(function ($filter) {
             $filter->withMeta(['query' => get_called_class()]);
 
             return $filter;
